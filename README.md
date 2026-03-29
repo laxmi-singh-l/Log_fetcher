@@ -1,39 +1,46 @@
-# log_fetch
+# Burp Suite Log Viewer
 
-Simple log viewer utility for quickly viewing and fetching logs.
+A web-based log viewer utility to quickly inspect and analyze Burp Suite XML logs using Python and Flask.
 
 ## Overview
 
-This repository contains a small Python script to inspect and fetch logs locally.
+This repository contains a Python script (`log_viewer.py`) that launches a local web application to view, search, and parse Burp Suite XML log files. It provides a clean, user-friendly interface to analyze HTTP requests and responses.
 
-## Files
+![Burp Suite Log Viewer](image.png)
 
-- [log_viewer.py](log_viewer.py) — main script to view/fetch logs.
+## Features
+
+- **Burp XML Integration**: Load and parse Burp Suite XML log files directly.
+- **Network Traffic Analyzer**: View HTTP requests, responses, headers, and status codes.
+- **Search & Filter**: Search through logs and filter by HTTP status codes (e.g., 200, 404, 500).
+- **Modern UI**: Dark-themed, responsive interface for comfortable log analysis.
+- **Detailed View**: Expandable tabs to view full request and response headers and bodies.
 
 ## Prerequisites
 
 - Python 3.8 or newer
-- (Optional) A virtual environment
+- Flask (`pip install flask`)
+- requests (`pip install requests`)
 
 ## Setup
 
-Windows (PowerShell):
+It is recommended to use a virtual environment.
 
+**Windows (PowerShell):**
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt  # if present
+pip install flask requests
 ```
 
-macOS / Linux:
-
+**macOS / Linux:**
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt  # if present
+pip install flask requests
 ```
 
-## Run
+## Usage
 
 Run the log viewer script:
 
@@ -41,24 +48,8 @@ Run the log viewer script:
 python log_viewer.py
 ```
 
-If `requirements.txt` exists, install dependencies first. If the script accepts CLI arguments, see the script header or run `python log_viewer.py --help`.
+The application will start a local server (typically at `http://127.0.0.1:5000/`). Open this URL in your web browser to access the log viewer. You can then use the "Load Burp XML" button to upload your Burp Suite log files.
 
 ## Contributing
 
 Feel free to open issues or pull requests for improvements, features, or fixes.
-
-## Frontend (UI)
-
-Below is a screenshot of the application's frontend UI. Save your frontend screenshot to `images/frontend.png` and it will display here.
-
-![Frontend UI](images/frontend.png)
-
-## Output (Example)
-
-Example output screenshot from running the tool. Save your output screenshot to `images/output.png` and it will display here.
-
-![Output Example](images/output.png)
-
-## License
-
-Add a `LICENSE` file to declare a license. If you prefer MIT, add an MIT license file.
