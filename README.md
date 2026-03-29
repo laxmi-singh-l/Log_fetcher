@@ -47,6 +47,18 @@ If `requirements.txt` exists, install dependencies first. If the script accepts 
 
 Feel free to open issues or pull requests for improvements, features, or fixes.
 
+## Frontend (UI)
+
+Below is a screenshot of the application's frontend UI. Save your frontend screenshot to `images/frontend.png` and it will display here.
+
+![Frontend UI](images/frontend.png)
+
+## Output (Example)
+
+Example output screenshot from running the tool. Save your output screenshot to `images/output.png` and it will display here.
+
+![Output Example](images/output.png)
+
 ## License
 
 Add a `LICENSE` file to declare a license. If you prefer MIT, add an MIT license file.
