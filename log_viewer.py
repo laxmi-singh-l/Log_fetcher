@@ -1,21 +1,23 @@
 import requests
 import json
 import re
+import xml.etree.ElementTree as ET
+import base64
 from flask import Flask, render_template_string, request, jsonify
 from datetime import datetime
 from typing import List, Dict, Any
-import urllib.parse
+import os
 
 app = Flask(__name__)
 
-# HTML template with network log viewer style
+# HTML template with Burp Suite integration
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Network Log Viewer</title>
+    <title>Burp Suite Log Viewer</title>
     <style>
         * {
             margin: 0;
@@ -65,6 +67,10 @@ HTML_TEMPLATE = """
             font-weight: 600;
         }
         
+        .burp-badge {
+            background: #ff6b6b;
+        }
+        
         .controls {
             display: flex;
             gap: 10px;
@@ -72,18 +78,25 @@ HTML_TEMPLATE = """
             flex-wrap: wrap;
         }
         
-        .url-input {
+        .url-input, .file-input {
             background: #3c3c3c;
             border: 1px solid #555;
             color: #cccccc;
             padding: 8px 15px;
             border-radius: 4px;
-            width: 400px;
             font-family: monospace;
             font-size: 13px;
         }
         
-        .url-input:focus {
+        .url-input {
+            width: 350px;
+        }
+        
+        .file-input {
+            width: 250px;
+        }
+        
+        .url-input:focus, .file-input:focus {
             outline: none;
             border-color: #007acc;
         }
@@ -104,6 +117,14 @@ HTML_TEMPLATE = """
             background: #1177bb;
         }
         
+        .btn-burp {
+            background: #8e44ad;
+        }
+        
+        .btn-burp:hover {
+            background: #9b59b6;
+        }
+        
         .btn-clear {
             background: #5a5a5a;
         }
@@ -120,6 +141,7 @@ HTML_TEMPLATE = """
             display: flex;
             gap: 20px;
             font-size: 12px;
+            flex-wrap: wrap;
         }
         
         .toolbar-item {
@@ -137,6 +159,16 @@ HTML_TEMPLATE = """
             font-weight: 500;
         }
         
+        .filter-input {
+            background: #3c3c3c;
+            border: 1px solid #555;
+            color: #cccccc;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            width: 200px;
+        }
+        
         /* Table Container */
         .table-container {
             flex: 1;
@@ -150,7 +182,7 @@ HTML_TEMPLATE = """
             border-collapse: collapse;
             font-family: 'Segoe UI', 'Roboto', monospace;
             font-size: 12px;
-            min-width: 800px;
+            min-width: 1000px;
         }
         
         .log-table thead {
@@ -227,29 +259,75 @@ HTML_TEMPLATE = """
             font-weight: 500;
         }
         
-        .type-xhr {
+        .type-GET {
             background: #0e639c;
             color: white;
         }
         
-        .type-fetch {
+        .type-POST {
             background: #6c3483;
             color: white;
         }
         
-        .type-js, .type-css {
+        .type-PUT {
             background: #2c5a2c;
             color: #8bc34a;
         }
         
-        .type-img, .type-media {
-            background: #5a4a2c;
-            color: #ffc107;
+        .type-DELETE {
+            background: #5a2c2c;
+            color: #ff6b6b;
         }
         
-        /* Size formatting */
-        .size-bytes {
-            color: #cccccc;
+        /* Detail panel */
+        .detail-panel {
+            background: #252526;
+            border-top: 1px solid #3e3e3e;
+            height: 200px;
+            display: none;
+            flex-direction: column;
+        }
+        
+        .detail-panel.show {
+            display: flex;
+        }
+        
+        .detail-header {
+            background: #2d2d2d;
+            padding: 8px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #3e3e3e;
+        }
+        
+        .detail-tabs {
+            display: flex;
+            gap: 15px;
+        }
+        
+        .detail-tab {
+            background: none;
+            border: none;
+            color: #858585;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .detail-tab.active {
+            color: #007acc;
+            border-bottom: 2px solid #007acc;
+        }
+        
+        .detail-content {
+            flex: 1;
+            overflow: auto;
+            padding: 15px;
+            font-family: monospace;
+            font-size: 11px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
         
         /* Error message */
@@ -305,10 +383,9 @@ HTML_TEMPLATE = """
             background: #4e4e4e;
         }
         
-        /* Responsive */
         @media (max-width: 768px) {
-            .url-input {
-                width: 250px;
+            .url-input, .file-input {
+                width: 200px;
             }
             
             .log-table {
@@ -325,14 +402,17 @@ HTML_TEMPLATE = """
 <body>
     <div class="header">
         <div class="title-section">
-            <h1>🌐 Network Log Viewer</h1>
-            <div class="badge">Developer Tools Style</div>
+            <h1>🔍 Burp Suite Log Viewer</h1>
+            <div class="badge burp-badge">Burp Integration</div>
+            <div class="badge">Network Traffic Analyzer</div>
         </div>
         <div class="controls">
             <input type="text" id="urlInput" class="url-input" 
-                   placeholder="Enter URL to fetch logs (JSON, HAR, or text)" 
+                   placeholder="Enter URL to fetch logs" 
                    value="{{ request_url }}">
-            <button class="btn" onclick="fetchLogs()">📡 Fetch Logs</button>
+            <button class="btn" onclick="fetchLogs()">🌐 Fetch URL</button>
+            <input type="file" id="burpFile" class="file-input" accept=".xml">
+            <button class="btn btn-burp" onclick="uploadBurpFile()">📁 Load Burp XML</button>
             <button class="btn btn-clear" onclick="clearLogs()">🗑 Clear</button>
         </div>
     </div>
@@ -343,8 +423,16 @@ HTML_TEMPLATE = """
             <span class="toolbar-value" id="totalCount">0</span>
         </div>
         <div class="toolbar-item">
-            <span class="toolbar-label">XHR/Fetch:</span>
-            <span class="toolbar-value" id="xhrCount">0</span>
+            <span class="toolbar-label">GET/POST:</span>
+            <span class="toolbar-value" id="methodCount">0/0</span>
+        </div>
+        <div class="toolbar-item">
+            <span class="toolbar-label">Source:</span>
+            <span class="toolbar-value" id="sourceLabel">-</span>
+        </div>
+        <div class="toolbar-item">
+            <span class="toolbar-label">Filter:</span>
+            <input type="text" id="filterInput" class="filter-input" placeholder="Filter by URL or status..." onkeyup="filterLogs()">
         </div>
         <div class="toolbar-item">
             <span class="toolbar-label">Last Updated:</span>
@@ -358,26 +446,42 @@ HTML_TEMPLATE = """
         <table class="log-table" id="logTable">
             <thead>
                 <tr>
-                    <th class="sortable" onclick="sortTable(0)">Name ⬍</th>
-                    <th class="sortable" onclick="sortTable(1)">Status ⬍</th>
-                    <th class="sortable" onclick="sortTable(2)">Type ⬍</th>
-                    <th class="sortable" onclick="sortTable(3)">Initiator ⬍</th>
+                    <th class="sortable" onclick="sortTable(0)">Method ⬍</th>
+                    <th class="sortable" onclick="sortTable(1)">URL ⬍</th>
+                    <th class="sortable" onclick="sortTable(2)">Status ⬍</th>
+                    <th class="sortable" onclick="sortTable(3)">Type ⬍</th>
                     <th class="sortable" onclick="sortTable(4)">Size ⬍</th>
                     <th class="sortable" onclick="sortTable(5)">Time ⬍</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody id="logTableBody">
                 <tr>
-                    <td colspan="6" style="text-align: center; padding: 40px; color: #858585;">
-                        Enter a URL above to fetch and display logs
+                    <td colspan="7" style="text-align: center; padding: 40px; color: #858585;">
+                        Load a Burp Suite XML export or enter a URL above
                     </td>
                 </tr>
             </tbody>
         </table>
     </div>
     
+    <div class="detail-panel" id="detailPanel">
+        <div class="detail-header">
+            <div class="detail-tabs">
+                <button class="detail-tab active" onclick="showDetailTab('request')">📤 Request</button>
+                <button class="detail-tab" onclick="showDetailTab('response')">📥 Response</button>
+            </div>
+            <button class="btn-clear" style="padding: 4px 12px;" onclick="hideDetailPanel()">✕ Close</button>
+        </div>
+        <div class="detail-content" id="detailContent">
+            Select a row to view details
+        </div>
+    </div>
+    
     <script>
         let currentLogs = [];
+        let filteredLogs = [];
+        let currentDetailIndex = -1;
         
         function fetchLogs() {
             const url = document.getElementById('urlInput').value;
@@ -387,6 +491,7 @@ HTML_TEMPLATE = """
             }
             
             showLoading();
+            document.getElementById('sourceLabel').innerText = 'URL';
             
             fetch('/fetch-logs', {
                 method: 'POST',
@@ -401,7 +506,7 @@ HTML_TEMPLATE = """
                     showError(data.error);
                 } else {
                     currentLogs = data.logs;
-                    renderTable(currentLogs);
+                    applyFilter();
                     updateStats(currentLogs);
                     document.getElementById('timestamp').innerText = data.timestamp;
                     hideError();
@@ -412,24 +517,147 @@ HTML_TEMPLATE = """
             });
         }
         
+        function uploadBurpFile() {
+            const fileInput = document.getElementById('burpFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showError('Please select a Burp Suite XML file');
+                return;
+            }
+            
+            showLoading();
+            document.getElementById('sourceLabel').innerText = 'Burp XML';
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('/upload-burp', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showError(data.error);
+                } else {
+                    currentLogs = data.logs;
+                    applyFilter();
+                    updateStats(currentLogs);
+                    document.getElementById('timestamp').innerText = data.timestamp;
+                    hideError();
+                }
+            })
+            .catch(error => {
+                showError('Error processing Burp file: ' + error.message);
+            });
+        }
+        
+        function applyFilter() {
+            const filterText = document.getElementById('filterInput').value.toLowerCase();
+            
+            if (!filterText) {
+                filteredLogs = [...currentLogs];
+            } else {
+                filteredLogs = currentLogs.filter(log => 
+                    (log.url && log.url.toLowerCase().includes(filterText)) ||
+                    (log.status && log.status.toString().includes(filterText)) ||
+                    (log.method && log.method.toLowerCase().includes(filterText))
+                );
+            }
+            
+            renderTable(filteredLogs);
+        }
+        
+        function filterLogs() {
+            applyFilter();
+            updateStats(filteredLogs);
+        }
+        
         function renderTable(logs) {
             const tbody = document.getElementById('logTableBody');
             
             if (!logs || logs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 40px; color: #858585;">No logs to display</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #858585;">No logs to display</td></tr>';
                 return;
             }
             
-            tbody.innerHTML = logs.map(log => `
+            tbody.innerHTML = logs.map((log, idx) => `
                 <tr>
-                    <td title="${escapeHtml(log.name || '-')}">${escapeHtml(truncate(log.name || '-', 60))}</td>
+                    <td><span class="type-badge type-${log.method || 'GET'}">${escapeHtml(log.method || '-')}</span></td>
+                    <td title="${escapeHtml(log.url || '-')}">${escapeHtml(truncate(log.url || '-', 80))}</td>
                     <td>${getStatusBadge(log.status)}</td>
-                    <td>${getTypeBadge(log.type)}</td>
-                    <td>${escapeHtml(log.initiator || '-')}</td>
+                    <td>${escapeHtml(log.contentType || '-')}</td>
                     <td>${formatSize(log.size)}</td>
                     <td>${escapeHtml(log.time || '-')}</td>
+                    <td><button class="btn" style="padding: 2px 8px;" onclick="showDetails(${idx})">📋 Details</button></td>
                 </tr>
             `).join('');
+        }
+        
+        function showDetails(index) {
+            const log = filteredLogs[index];
+            if (!log) return;
+            
+            currentDetailIndex = index;
+            const panel = document.getElementById('detailPanel');
+            panel.classList.add('show');
+            
+            showDetailTab('request');
+            
+            // Store current log for detail viewing
+            window.currentDetailLog = log;
+        }
+        
+        function showDetailTab(tab) {
+            const log = window.currentDetailLog;
+            if (!log) return;
+            
+            // Update tab active state
+            document.querySelectorAll('.detail-tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            const content = document.getElementById('detailContent');
+            
+            if (tab === 'request') {
+                let requestText = `${log.method || 'GET'} ${log.url || '/'} HTTP/1.1\\n`;
+                if (log.requestHeaders) {
+                    requestText += log.requestHeaders;
+                } else {
+                    requestText += `Host: ${extractHost(log.url)}\\n`;
+                    requestText += `User-Agent: Burp Suite Viewer\\n`;
+                    requestText += `Accept: */*\\n`;
+                }
+                if (log.requestBody) {
+                    requestText += `\\n${log.requestBody}`;
+                }
+                content.textContent = requestText;
+            } else {
+                let responseText = `HTTP/1.1 ${log.status || '200'} OK\\n`;
+                if (log.responseHeaders) {
+                    responseText += log.responseHeaders;
+                } else {
+                    responseText += `Content-Type: ${log.contentType || 'application/octet-stream'}\\n`;
+                    responseText += `Content-Length: ${log.size || '0'}\\n`;
+                }
+                if (log.responseBody) {
+                    responseText += `\\n${truncate(log.responseBody, 5000)}`;
+                }
+                content.textContent = responseText;
+            }
+        }
+        
+        function hideDetailPanel() {
+            document.getElementById('detailPanel').classList.remove('show');
+        }
+        
+        function extractHost(url) {
+            try {
+                const urlObj = new URL(url);
+                return urlObj.host;
+            } catch {
+                return '';
+            }
         }
         
         function getStatusBadge(status) {
@@ -445,26 +673,12 @@ HTML_TEMPLATE = """
             return `<span class="status-badge ${statusClass}">${status}</span>`;
         }
         
-        function getTypeBadge(type) {
-            if (!type) return '<span class="type-badge">-</span>';
-            const typeLower = type.toLowerCase();
-            let typeClass = 'type-badge';
-            if (typeLower === 'xhr') typeClass += ' type-xhr';
-            else if (typeLower === 'fetch') typeClass += ' type-fetch';
-            else if (typeLower.includes('js')) typeClass += ' type-js';
-            else if (typeLower.includes('css')) typeClass += ' type-css';
-            else if (typeLower.includes('img') || typeLower.includes('png') || typeLower.includes('jpg')) typeClass += ' type-img';
-            
-            return `<span class="${typeClass}">${escapeHtml(type)}</span>`;
-        }
-        
         function formatSize(size) {
             if (!size) return '-';
-            const sizeStr = String(size);
-            if (sizeStr.includes('kB') || sizeStr.includes('MB')) return sizeStr;
+            if (typeof size === 'string' && (size.includes('kB') || size.includes('MB'))) return size;
             
-            const bytes = parseFloat(sizeStr);
-            if (isNaN(bytes)) return sizeStr;
+            const bytes = parseInt(size);
+            if (isNaN(bytes)) return String(size);
             
             if (bytes < 1024) return bytes + ' B';
             if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' kB';
@@ -482,9 +696,9 @@ HTML_TEMPLATE = """
                 sortAscending = true;
             }
             
-            const sorted = [...currentLogs].sort((a, b) => {
+            const sorted = [...filteredLogs].sort((a, b) => {
                 let aVal, bVal;
-                const columns = ['name', 'status', 'type', 'initiator', 'size', 'time'];
+                const columns = ['method', 'url', 'status', 'contentType', 'size', 'time'];
                 const key = columns[columnIndex];
                 
                 aVal = a[key] || '';
@@ -504,37 +718,26 @@ HTML_TEMPLATE = """
             });
             
             renderTable(sorted);
-            updateTableHeaders(columnIndex);
-        }
-        
-        function updateTableHeaders(sortedColumn) {
-            const headers = document.querySelectorAll('.log-table th');
-            headers.forEach((header, idx) => {
-                header.innerHTML = header.innerHTML.replace(/[⬍⬎]/, '');
-                if (idx === sortedColumn) {
-                    header.innerHTML += sortAscending ? ' ⬍' : ' ⬎';
-                } else {
-                    header.innerHTML += ' ⬍';
-                }
-            });
         }
         
         function updateStats(logs) {
             document.getElementById('totalCount').innerText = logs.length;
-            const xhrCount = logs.filter(log => 
-                log.type && (log.type.toLowerCase() === 'xhr' || log.type.toLowerCase() === 'fetch')
-            ).length;
-            document.getElementById('xhrCount').innerText = xhrCount;
+            const getCount = logs.filter(log => log.method === 'GET').length;
+            const postCount = logs.filter(log => log.method === 'POST').length;
+            document.getElementById('methodCount').innerText = `${getCount}/${postCount}`;
         }
         
         function showLoading() {
             const tbody = document.getElementById('logTableBody');
-            tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading logs...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading logs...</td></tr>';
         }
         
         function showError(message) {
             const errorDiv = document.getElementById('errorContainer');
             errorDiv.innerHTML = `<div class="error-message">⚠️ ${escapeHtml(message)}</div>`;
+            setTimeout(() => {
+                if (errorDiv.innerHTML) errorDiv.innerHTML = '';
+            }, 5000);
         }
         
         function hideError() {
@@ -544,104 +747,151 @@ HTML_TEMPLATE = """
         
         function clearLogs() {
             currentLogs = [];
+            filteredLogs = [];
             renderTable([]);
             updateStats([]);
             document.getElementById('timestamp').innerText = '-';
+            document.getElementById('sourceLabel').innerText = '-';
+            document.getElementById('filterInput').value = '';
+            hideDetailPanel();
         }
         
         function escapeHtml(text) {
+            if (!text) return '';
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
         }
         
         function truncate(str, length) {
+            if (!str) return '';
             if (str.length <= length) return str;
             return str.substring(0, length) + '...';
         }
         
-        // Allow Enter key to trigger fetch
         document.getElementById('urlInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                fetchLogs();
-            }
+            if (e.key === 'Enter') fetchLogs();
         });
     </script>
 </body>
 </html>
 """
 
+def parse_burp_xml(file_path: str) -> List[Dict[str, Any]]:
+    """Parse Burp Suite XML export file"""
+    logs = []
+    
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        
+        for item in root.findall('.//item'):
+            log = {}
+            
+            # Extract request info
+            url_elem = item.find('url')
+            if url_elem is not None and url_elem.text:
+                log['url'] = url_elem.text
+            
+            method_elem = item.find('method')
+            if method_elem is not None and method_elem.text:
+                log['method'] = method_elem.text
+            else:
+                log['method'] = 'GET'
+            
+            # Extract status
+            status_elem = item.find('status')
+            if status_elem is not None and status_elem.text:
+                log['status'] = status_elem.text
+            
+            # Extract content type from response
+            response_elem = item.find('response')
+            if response_elem is not None and response_elem.text:
+                try:
+                    response_decoded = base64.b64decode(response_elem.text).decode('utf-8', errors='ignore')
+                    # Parse content-type from response headers
+                    if 'Content-Type:' in response_decoded:
+                        lines = response_decoded.split('\n')
+                        for line in lines:
+                            if line.startswith('Content-Type:'):
+                                log['contentType'] = line.split(':')[1].strip().split(';')[0]
+                                break
+                    
+                    # Store full response for detail view
+                    log['responseBody'] = response_decoded[:10000]  # Limit size
+                    log['responseHeaders'] = response_decoded[:2000]
+                except:
+                    pass
+            
+            # Extract request body
+            request_elem = item.find('request')
+            if request_elem is not None and request_elem.text:
+                try:
+                    request_decoded = base64.b64decode(request_elem.text).decode('utf-8', errors='ignore')
+                    log['requestHeaders'] = request_decoded[:2000]
+                    # Extract body (after double newline)
+                    if '\n\n' in request_decoded:
+                        parts = request_decoded.split('\n\n', 1)
+                        if len(parts) > 1:
+                            log['requestBody'] = parts[1][:5000]
+                except:
+                    pass
+            
+            # Extract response length
+            length_elem = item.find('responselength')
+            if length_elem is not None and length_elem.text:
+                log['size'] = length_elem.text
+            
+            # Default values if missing
+            log.setdefault('contentType', 'unknown')
+            log.setdefault('size', '0')
+            log.setdefault('status', '200')
+            
+            # Add time (use index as placeholder)
+            log['time'] = f"{len(logs) * 10} ms"
+            
+            logs.append(log)
+            
+    except Exception as e:
+        raise Exception(f"Failed to parse Burp XML: {str(e)}")
+    
+    return logs
+
 def parse_network_logs(data: Any) -> List[Dict[str, Any]]:
     """Parse various log formats into network log format"""
     logs = []
     
-    # If data is already in network log format
     if isinstance(data, list) and len(data) > 0:
         for item in data:
             if isinstance(item, dict):
                 log = {
-                    'name': item.get('name', item.get('url', item.get('file', '-'))),
+                    'method': item.get('method', item.get('requestMethod', 'GET')),
+                    'url': item.get('url', item.get('name', item.get('file', '-'))),
                     'status': str(item.get('status', item.get('statusCode', '200'))),
-                    'type': item.get('type', item.get('method', item.get('contentType', 'xhr'))),
-                    'initiator': item.get('initiator', item.get('source', item.get('caller', 'unknown'))),
+                    'contentType': item.get('contentType', item.get('type', 'unknown')),
                     'size': format_size_value(item.get('size', item.get('bytes', item.get('contentLength', '0')))),
-                    'time': format_time_value(item.get('time', item.get('duration', item.get('elapsed', '0'))))
+                    'time': format_time_value(item.get('time', item.get('duration', item.get('elapsed', '0')))),
+                    'requestHeaders': item.get('requestHeaders', ''),
+                    'requestBody': item.get('requestBody', ''),
+                    'responseHeaders': item.get('responseHeaders', ''),
+                    'responseBody': item.get('responseBody', '')
                 }
                 logs.append(log)
         return logs
     
-    # If data is a HAR (HTTP Archive) format
-    if isinstance(data, dict):
-        if 'log' in data and 'entries' in data['log']:
-            for entry in data['log']['entries']:
-                log = {
-                    'name': entry.get('request', {}).get('url', '-').split('/')[-1] or '-',
-                    'status': str(entry.get('response', {}).get('status', '200')),
-                    'type': entry.get('request', {}).get('method', 'GET'),
-                    'initiator': entry.get('initiator', {}).get('type', 'unknown'),
-                    'size': format_size_value(entry.get('response', {}).get('bodySize', 0)),
-                    'time': f"{entry.get('time', 0):.0f} ms"
-                }
-                logs.append(log)
-            return logs
-    
-    # Parse text-based logs
     if isinstance(data, str):
         lines = data.strip().split('\n')
-        
-        # Check if it's a table format (like from the image)
-        if '|' in lines[0] and ('Name' in lines[0] or 'name' in lines[0].lower()):
-            # Parse markdown table
-            headers = [h.strip() for h in lines[0].split('|') if h.strip()]
-            for line in lines[2:]:  # Skip header and separator line
-                if '|' in line:
-                    values = [v.strip() for v in line.split('|') if v.strip()]
-                    if len(values) >= len(headers):
-                        log = {}
-                        for i, header in enumerate(headers):
-                            log[header.lower()] = values[i] if i < len(values) else '-'
-                        logs.append({
-                            'name': log.get('name', '-'),
-                            'status': log.get('status', '200'),
-                            'type': log.get('type', 'xhr'),
-                            'initiator': log.get('initiator', 'unknown'),
-                            'size': log.get('size', '0'),
-                            'time': log.get('time', '0 ms')
-                        })
-            return logs
-        
-        # Parse JSON lines format
         for line in lines:
             try:
                 item = json.loads(line)
                 if isinstance(item, dict):
                     logs.append({
-                        'name': item.get('name', item.get('url', '-')),
+                        'method': item.get('method', 'GET'),
+                        'url': item.get('url', '-'),
                         'status': str(item.get('status', '200')),
-                        'type': item.get('type', item.get('method', 'xhr')),
-                        'initiator': item.get('initiator', 'unknown'),
-                        'size': format_size_value(item.get('size', item.get('bytes', 0))),
-                        'time': format_time_value(item.get('time', item.get('duration', 0)))
+                        'contentType': item.get('contentType', 'unknown'),
+                        'size': format_size_value(item.get('size', 0)),
+                        'time': format_time_value(item.get('time', 0))
                     })
             except json.JSONDecodeError:
                 continue
@@ -649,7 +899,6 @@ def parse_network_logs(data: Any) -> List[Dict[str, Any]]:
     return logs
 
 def format_size_value(size):
-    """Format size value to human readable format"""
     if isinstance(size, str):
         if 'kB' in size or 'MB' in size or 'B' in size:
             return size
@@ -669,7 +918,6 @@ def format_size_value(size):
     return str(size)
 
 def format_time_value(time):
-    """Format time value to include ms"""
     if isinstance(time, str):
         if 'ms' in time or 's' in time:
             return time
@@ -688,12 +936,10 @@ def format_time_value(time):
 
 @app.route('/')
 def index():
-    """Render the main page"""
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/fetch-logs', methods=['POST'])
 def fetch_logs():
-    """Fetch logs from provided URL"""
     try:
         data = request.get_json()
         url = data.get('url', '')
@@ -701,82 +947,63 @@ def fetch_logs():
         if not url:
             return jsonify({'error': 'Please provide a URL'})
         
-        # Fetch data from URL
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         
-        content_type = response.headers.get('content-type', '').lower()
         content = response.text
         
-        # Try to parse as JSON
-        parsed_data = None
-        if 'application/json' in content_type or content.strip().startswith(('{', '[')):
-            try:
-                parsed_data = response.json()
-            except:
-                parsed_data = content
-        else:
+        try:
+            parsed_data = response.json()
+        except:
             parsed_data = content
         
-        # Parse into network log format
         logs = parse_network_logs(parsed_data)
         
         if not logs:
-            # Create sample data if no logs found
             logs = [
-                {
-                    'name': 'operatorParams',
-                    'status': '200',
-                    'type': 'xhr',
-                    'initiator': 'chat_load.js:116',
-                    'size': '1.0 kB',
-                    'time': '159 ms'
-                },
-                {
-                    'name': 'reload?k=6LcA2tEZAAAAaJJ7FTYTF9cZ4NL3ShgB...',
-                    'status': '200',
-                    'type': 'xhr',
-                    'initiator': 'recaptcha_en.js:1115',
-                    'size': '23.8 kB',
-                    'time': '250 ms'
-                },
-                {
-                    'name': 'cir?k=6LcA2tEZAAAAaJJ7FTYTF9cZ4NL3ShgBCB...',
-                    'status': '200',
-                    'type': 'fetch',
-                    'initiator': 'recaptcha_en.js:1570',
-                    'size': '0.3 kB',
-                    'time': '112 ms'
-                },
-                {
-                    'name': 'browserinfo?fsid=8938489990766186326&bl=bob...',
-                    'status': '200',
-                    'type': 'xhr',
-                    'initiator': 'm=b_tp:313',
-                    'size': '0.3 kB',
-                    'time': '120 ms'
-                }
+                {'method': 'GET', 'url': 'https://api.example.com/operatorParams', 'status': '200', 'contentType': 'application/json', 'size': '1.0 kB', 'time': '159 ms'},
+                {'method': 'GET', 'url': 'https://api.example.com/reload?k=6LcA2tEZAAAAaJJ7FTYTF9cZ4NL3ShgB...', 'status': '200', 'contentType': 'application/javascript', 'size': '23.8 kB', 'time': '250 ms'},
+                {'method': 'POST', 'url': 'https://api.example.com/cir?k=6LcA2tEZAAAAaJJ7FTYTF9cZ4NL3ShgBCB...', 'status': '200', 'contentType': 'application/json', 'size': '0.3 kB', 'time': '112 ms'},
+                {'method': 'GET', 'url': 'https://api.example.com/browserinfo?fsid=8938489990766186326', 'status': '200', 'contentType': 'application/json', 'size': '0.3 kB', 'time': '120 ms'}
             ]
         
-        return jsonify({
-            'logs': logs[:500],  # Limit to 500 logs for performance
-            'timestamp': datetime.now().strftime('%H:%M:%S')
-        })
+        return jsonify({'logs': logs[:500], 'timestamp': datetime.now().strftime('%H:%M:%S')})
         
-    except requests.exceptions.RequestException as e:
-        return jsonify({'error': f'Failed to fetch URL: {str(e)}'})
     except Exception as e:
-        return jsonify({'error': f'Error processing logs: {str(e)}'})
+        return jsonify({'error': f'Error: {str(e)}'})
+
+@app.route('/upload-burp', methods=['POST'])
+def upload_burp():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'})
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'})
+        
+        # Save temporarily
+        temp_path = f"/tmp/burp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml"
+        file.save(temp_path)
+        
+        logs = parse_burp_xml(temp_path)
+        
+        # Clean up
+        os.remove(temp_path)
+        
+        if not logs:
+            return jsonify({'error': 'No valid logs found in Burp XML file'})
+        
+        return jsonify({'logs': logs[:500], 'timestamp': datetime.now().strftime('%H:%M:%S')})
+        
+    except Exception as e:
+        return jsonify({'error': f'Error processing Burp file: {str(e)}'})
 
 if __name__ == '__main__':
     import subprocess
     import sys
     
-    # Install required packages
     required_packages = ['flask', 'requests']
     for package in required_packages:
         try:
@@ -786,16 +1013,20 @@ if __name__ == '__main__':
             subprocess.check_call([sys.executable, "-m", "pip", "install", package])
     
     print("=" * 60)
-    print("🌐 Network Log Viewer Started")
+    print("🔍 Burp Suite Log Viewer Started")
     print("=" * 60)
     print(f"📍 Access at: http://127.0.0.1:5000")
-    print(f"📊 Style: Developer Tools Network Tab")
+    print(f"📊 Features:")
+    print(f"   • Load Burp Suite XML exports")
+    print(f"   • Fetch logs from URLs")
+    print(f"   • View request/response details")
+    print(f"   • Filter and sort traffic")
     print("=" * 60)
-    print("\nTips:")
-    print("  • Enter any URL that returns logs in JSON or text format")
-    print("  • Supports HAR format, JSON arrays, and text tables")
-    print("  • Click column headers to sort")
-    print("  • Sample data is shown if URL doesn't return logs")
+    print("\n📁 How to export from Burp Suite:")
+    print("   1. Go to Target → Site map")
+    print("   2. Right-click on target → Save selected items")
+    print("   3. Ensure 'Base64-encode' is checked")
+    print("   4. Save as XML file")
     print("=" * 60)
     
     app.run(debug=True, host='127.0.0.1', port=5000)
