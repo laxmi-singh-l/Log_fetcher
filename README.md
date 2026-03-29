@@ -1,4 +1,4 @@
-# Log Viewer
+# Log Fetcher(for analyzing )
 
 A web-based log viewer utility to quickly inspect and analyze Burp Suite XML logs using Python and Flask.
 
